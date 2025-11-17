@@ -564,14 +564,10 @@
 
   <!-- ethers.js UMD build -->
   <script src="https://cdn.jsdelivr.net/npm/ethers@6.13.2/dist/ethers.umd.min.js"></script>
-  <script>
-    // TODO: Substitua pela sua URL real do RPC da Arc Testnet
-const RPC_URL = "https://corsproxy.io/?https://rpc.testnet.arc.network";
-
-
-
-
-    const NUM_BLOCKS = 40; // janela de blocos recentes para a amostra
+    <script>
+    // Usando apenas fetch direto no RPC da Arc Testnet
+    const RPC_URL = "https://rpc.testnet.arc.network";
+    const NUM_BLOCKS = 40; // janela de blocos para amostra
 
     const els = {
       statusText: document.getElementById("statusText"),
@@ -609,22 +605,37 @@ const RPC_URL = "https://corsproxy.io/?https://rpc.testnet.arc.network";
       return (n / 1000000000).toFixed(1) + "B";
     }
 
-    async function fetchStats() {
-      if (!RPC_URL || RPC_URL.includes("PASTE_YOUR_ARC_RPC_URL_HERE")) {
-        setStatus("Please configure RPC_URL inside index.html to your Arc Testnet RPC.", true);
-        setRpcOnline(false);
-        return;
+    async function rpcCall(method, params = []) {
+      const res = await fetch(RPC_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: 1,
+          method,
+          params
+        })
+      });
+      if (!res.ok) {
+        throw new Error("HTTP " + res.status);
       }
+      const data = await res.json();
+      if (data.error) {
+        throw new Error(data.error.message || "RPC error");
+      }
+      return data.result;
+    }
 
+    async function fetchStats() {
       setStatus("Fetching latest blocks from Arc Testnet…");
       setRpcOnline(false);
       els.refreshBtn.disabled = true;
       els.refreshBtn.style.opacity = 0.7;
 
       try {
-        const provider = new ethers.JsonRpcProvider(RPC_URL);
-
-        const latestBlockNumber = await provider.getBlockNumber();
+        // 1) pegar número do último bloco
+        const latestHex = await rpcCall("eth_blockNumber", []);
+        const latestBlockNumber = parseInt(latestHex, 16);
 
         let minBlock = latestBlockNumber;
         let maxBlock = latestBlockNumber;
@@ -636,7 +647,6 @@ const RPC_URL = "https://corsproxy.io/?https://rpc.testnet.arc.network";
         let totalGas = 0n;
         let gasCount = 0n;
         const destCounts = new Map();
-
         let prevTimestamp = null;
 
         const blocksToFetch = Math.max(1, NUM_BLOCKS);
@@ -645,13 +655,16 @@ const RPC_URL = "https://corsproxy.io/?https://rpc.testnet.arc.network";
           const blockNumber = latestBlockNumber - i;
           if (blockNumber < 0) break;
 
-          const block = await provider.getBlockWithTransactions(blockNumber);
+          const hexBlockNumber = "0x" + blockNumber.toString(16);
+
+          // 2) pegar bloco com transações
+          const block = await rpcCall("eth_getBlockByNumber", [hexBlockNumber, true]);
           if (!block) continue;
 
           if (blockNumber < minBlock) minBlock = blockNumber;
           if (blockNumber > maxBlock) maxBlock = blockNumber;
 
-          const ts = Number(block.timestamp);
+          const ts = parseInt(block.timestamp, 16);
 
           if (prevTimestamp !== null) {
             const diff = prevTimestamp - ts;
@@ -675,14 +688,13 @@ const RPC_URL = "https://corsproxy.io/?https://rpc.testnet.arc.network";
               destCounts.set(toAddr, (destCounts.get(toAddr) || 0) + 1);
             }
 
-            let gasPrice = tx.gasPrice ?? tx.maxFeePerGas ?? null;
-            if (gasPrice != null) {
+            if (tx.gasPrice) {
               try {
-                const gpBig = BigInt(gasPrice.toString());
+                const gpBig = BigInt(tx.gasPrice); // hex -> BigInt
                 totalGas += gpBig;
                 gasCount += 1n;
               } catch (e) {
-                // ignore malformed gas price
+                // ignora gas inválido
               }
             }
           }
@@ -737,7 +749,7 @@ const RPC_URL = "https://corsproxy.io/?https://rpc.testnet.arc.network";
         setRpcOnline(true);
       } catch (err) {
         console.error(err);
-        setStatus("Error while fetching data from RPC. Check console and RPC URL.", true);
+        setStatus("Error while fetching data from RPC: " + err.message, true);
         setRpcOnline(false);
       } finally {
         els.refreshBtn.disabled = false;
@@ -747,8 +759,7 @@ const RPC_URL = "https://corsproxy.io/?https://rpc.testnet.arc.network";
 
     document.addEventListener("DOMContentLoaded", () => {
       els.refreshBtn.addEventListener("click", fetchStats);
-      // Fetch automático ao abrir a página
-      fetchStats();
+      fetchStats(); // primeira chamada automática
     });
   </script>
 </body>
